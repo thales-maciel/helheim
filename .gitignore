@@ -1,0 +1,12 @@
+dist-newstyle/
+.cabal-sandbox/
+cabal.sandbox.config
+
+data/*.bin
+test-output/
+
+.env
+.env.*
+!.env.example
+
+rinha-de-backend-2026/test/results.json

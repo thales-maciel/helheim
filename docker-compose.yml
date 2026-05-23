@@ -1,0 +1,54 @@
+services:
+  nginx:
+    image: nginx:1.27-alpine
+    platform: linux/amd64
+    ports:
+      - "9999:9999"
+    volumes:
+      - ./ops/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - api1
+      - api2
+    networks:
+      - rinha
+    deploy:
+      resources:
+        limits:
+          cpus: "0.05"
+          memory: "20MB"
+
+  api1:
+    image: helheim:local
+    platform: linux/amd64
+    build:
+      context: .
+    environment:
+      PORT: "8080"
+      HELHEIM_INDEX: /app/data/references.bin
+    networks:
+      - rinha
+    deploy:
+      resources:
+        limits:
+          cpus: "0.475"
+          memory: "165MB"
+
+  api2:
+    image: helheim:local
+    platform: linux/amd64
+    build:
+      context: .
+    environment:
+      PORT: "8080"
+      HELHEIM_INDEX: /app/data/references.bin
+    networks:
+      - rinha
+    deploy:
+      resources:
+        limits:
+          cpus: "0.475"
+          memory: "165MB"
+
+networks:
+  rinha:
+    driver: bridge

@@ -1,0 +1,35 @@
+[tools]
+cabal = "3.12.1.0"
+k6 = "latest"
+jq = "latest"
+shellcheck = "0.11.0"
+
+[tasks.build]
+description = "Build all Haskell targets"
+run = "cabal build all"
+
+[tasks.test]
+description = "Run the Haskell test suite"
+run = "cabal test all"
+
+[tasks.build-index]
+description = "Build the compact reference index from contest resources"
+run = "mkdir -p data && cabal run helheim-build-index -- --input rinha-de-backend-2026/resources/references.json.gz --output data/references.bin"
+
+[tasks.api]
+description = "Run one API instance on port 9999 using a local compact index"
+run = "cabal run helheim-api -- --port 9999 --index data/references.bin"
+
+[tasks.compose]
+description = "Build and run the local two-instance compose stack"
+run = "docker compose up --build"
+
+[tasks.smoke]
+description = "Run the official smoke test against localhost:9999"
+dir = "rinha-de-backend-2026"
+run = "docker compose -f test/docker-compose.yml --profile smoke up --abort-on-container-exit"
+
+[tasks.preview]
+description = "Run the official preview load test against localhost:9999"
+dir = "rinha-de-backend-2026"
+run = "./run.sh"
