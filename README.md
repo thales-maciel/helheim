@@ -9,9 +9,11 @@ required by the contest:
 - `GET /ready`
 - `POST /fraud-score`
 
-The current implementation is a correctness-first baseline. It vectorizes each
-payload according to the contest rules and performs top-5 nearest-neighbor
-search over a compact quantized reference index.
+The current implementation vectorizes each payload according to the contest
+rules and performs exact top-5 nearest-neighbor search over a compact KD-tree
+index. Exact KD mode is the default because it matched the published test data
+with zero detection errors while staying below 1 ms p99 in the in-process
+evaluator on this machine.
 
 ## Development
 
@@ -37,6 +39,16 @@ Build the local compact index:
 ```sh
 mise run build-index
 ```
+
+Evaluate the local test set:
+
+```sh
+mise run eval
+mise run eval-hybrid
+```
+
+`eval-hybrid` enables conservative shortcut rules before KD search. It is kept
+as an experimental mode; exact KD is the safer production default.
 
 Run one local API instance:
 
@@ -67,6 +79,8 @@ a public `linux-amd64` image reference as required by the contest rules.
 - The load balancer only proxies requests in round-robin; it does not inspect
   fraud payloads.
 - The API returns `approved = fraud_score < 0.6`.
+- Exact KD search is used by default. Set `HELHEIM_ENGINE=hybrid` only when the
+  shortcut-vs-detection tradeoff is explicitly desired.
 - `rinha-de-backend-2026/test/test-data.json` is never used as a lookup table.
 - The repository includes an MIT license because the contest requires public
   submissions to be MIT licensed.

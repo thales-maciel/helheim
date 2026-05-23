@@ -19,6 +19,7 @@ library
   hs-source-dirs: src
   exposed-modules:
     Helheim.Api
+    Helheim.Engine
     Helheim.Index
     Helheim.ReferenceBuilder
     Helheim.Types
@@ -56,6 +57,19 @@ executable helheim-build-index
     -rtsopts
   build-depends:
     base,
+    helheim
+
+executable helheim-eval
+  import: common-options
+  hs-source-dirs: app
+  main-is: EvalMain.hs
+  ghc-options:
+    -threaded
+    -rtsopts
+  build-depends:
+    base,
+    aeson,
+    bytestring,
     helheim
 
 test-suite helheim-test

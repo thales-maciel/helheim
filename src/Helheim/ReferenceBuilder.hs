@@ -14,7 +14,8 @@ import Control.Monad (forM_)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BSC
 import qualified Data.ByteString.Lazy as BL
-import Data.Int (Int16)
+import Data.IORef
+import Data.Int (Int16, Int32)
 import Data.Word (Word8)
 import Helheim.Index
 import Helheim.Vectorize (encodeDimension)
@@ -45,14 +46,181 @@ buildIndexFromJsonBytes output jsonBytes = do
   stats <- fillVectors jsonBytes count vectors labels
   frozenVectors <- VS.unsafeFreeze vectors
   frozenLabels <- VS.unsafeFreeze labels
+  index <- buildKdIndex count frozenVectors frozenLabels
   saveIndex
     output
+    index
+  pure stats
+
+buildKdIndex :: Int -> VS.Vector Int16 -> VS.Vector Word8 -> IO ReferenceIndex
+buildKdIndex count originalVectors originalLabels = do
+  hPutStrLn stderr ("building kd-tree index with leaf size " <> show leafSize)
+  indices <- MVS.new count
+  forInt 0 count $ \i ->
+    MVS.unsafeWrite indices i (fromIntegral i)
+  let maxLeaves = nextPowerOfTwo ((count + leafSize - 1) `div` leafSize)
+      maxNodes = 2 * maxLeaves + 1
+  nodeMeta <- MVS.replicate (maxNodes * nodeMetaFields) 0
+  nodeBounds <- MVS.new (maxNodes * dimensions * 2)
+  nextNode <- newIORef 0
+  _ <- buildNode originalVectors indices nodeMeta nodeBounds nextNode 0 count
+  nodeCount <- readIORef nextNode
+  hPutStrLn stderr ("kd-tree nodes: " <> show nodeCount)
+  reorderedVectors <- MVS.new (count * dimensions)
+  reorderedLabels <- MVS.new count
+  forInt 0 count $ \newRow -> do
+    oldRow <- fromIntegral <$> MVS.unsafeRead indices newRow
+    forInt 0 dimensions $ \dim ->
+      MVS.unsafeWrite reorderedVectors (newRow * dimensions + dim) (refValue originalVectors oldRow dim)
+    MVS.unsafeWrite reorderedLabels newRow (originalLabels VS.! oldRow)
+  finalVectors <- VS.unsafeFreeze reorderedVectors
+  finalLabels <- VS.unsafeFreeze reorderedLabels
+  finalMetaFull <- VS.unsafeFreeze nodeMeta
+  finalBoundsFull <- VS.unsafeFreeze nodeBounds
+  pure
     ReferenceIndex
       { referenceCount = count,
-        referenceVectors = frozenVectors,
-        referenceLabels = frozenLabels
+        referenceVectors = finalVectors,
+        referenceLabels = finalLabels,
+        referenceNodeCount = nodeCount,
+        referenceNodeMeta = VS.take (nodeCount * nodeMetaFields) finalMetaFull,
+        referenceNodeBounds = VS.take (nodeCount * dimensions * 2) finalBoundsFull
       }
-  pure stats
+
+buildNode ::
+  VS.Vector Int16 ->
+  MVS.IOVector Int32 ->
+  MVS.IOVector Int32 ->
+  MVS.IOVector Int16 ->
+  IORef Int ->
+  Int ->
+  Int ->
+  IO Int
+buildNode refs indices nodeMeta nodeBounds nextNode start count = do
+  node <- allocNode nextNode
+  (mins, maxs, splitDim, splitWidth) <- computeBounds refs indices start count
+  writeNodeBounds nodeBounds node mins maxs
+  if count <= leafSize || splitWidth == 0
+    then do
+      writeMeta nodeMeta node (-1) (-1) start count
+      pure node
+    else do
+      let median = start + count `div` 2
+      selectByDim refs indices start (start + count) median splitDim
+      left <- buildNode refs indices nodeMeta nodeBounds nextNode start (median - start)
+      right <- buildNode refs indices nodeMeta nodeBounds nextNode median (start + count - median)
+      writeMeta nodeMeta node left right 0 0
+      pure node
+
+allocNode :: IORef Int -> IO Int
+allocNode ref = do
+  node <- readIORef ref
+  writeIORef ref (node + 1)
+  pure node
+
+computeBounds ::
+  VS.Vector Int16 ->
+  MVS.IOVector Int32 ->
+  Int ->
+  Int ->
+  IO (VS.Vector Int16, VS.Vector Int16, Int, Int)
+computeBounds refs indices start count = do
+  firstRow <- fromIntegral <$> MVS.unsafeRead indices start
+  mins <- MVS.new dimensions
+  maxs <- MVS.new dimensions
+  forInt 0 dimensions $ \dim -> do
+    let value = refValue refs firstRow dim
+    MVS.unsafeWrite mins dim value
+    MVS.unsafeWrite maxs dim value
+  forInt (start + 1) (start + count) $ \pos -> do
+    row <- fromIntegral <$> MVS.unsafeRead indices pos
+    forInt 0 dimensions $ \dim -> do
+      let value = refValue refs row dim
+      oldMin <- MVS.unsafeRead mins dim
+      oldMax <- MVS.unsafeRead maxs dim
+      if value < oldMin then MVS.unsafeWrite mins dim value else pure ()
+      if value > oldMax then MVS.unsafeWrite maxs dim value else pure ()
+  minsFrozen <- VS.unsafeFreeze mins
+  maxsFrozen <- VS.unsafeFreeze maxs
+  let (splitDim, splitWidth) = widestDimension minsFrozen maxsFrozen
+  pure (minsFrozen, maxsFrozen, splitDim, splitWidth)
+
+widestDimension :: VS.Vector Int16 -> VS.Vector Int16 -> (Int, Int)
+widestDimension mins maxs =
+  go 0 0 0
+  where
+    go !dim !bestDim !bestWidth
+      | dim >= dimensions = (bestDim, bestWidth)
+      | otherwise =
+          let width = fromIntegral (maxs VS.! dim) - fromIntegral (mins VS.! dim)
+           in if width > bestWidth
+                then go (dim + 1) dim width
+                else go (dim + 1) bestDim bestWidth
+
+writeMeta :: MVS.IOVector Int32 -> Int -> Int -> Int -> Int -> Int -> IO ()
+writeMeta nodeMeta node left right start count = do
+  let base = node * nodeMetaFields
+  MVS.unsafeWrite nodeMeta base (fromIntegral left)
+  MVS.unsafeWrite nodeMeta (base + 1) (fromIntegral right)
+  MVS.unsafeWrite nodeMeta (base + 2) (fromIntegral start)
+  MVS.unsafeWrite nodeMeta (base + 3) (fromIntegral count)
+
+writeNodeBounds :: MVS.IOVector Int16 -> Int -> VS.Vector Int16 -> VS.Vector Int16 -> IO ()
+writeNodeBounds nodeBounds node mins maxs = do
+  let base = node * dimensions * 2
+  forInt 0 dimensions $ \dim -> do
+    MVS.unsafeWrite nodeBounds (base + dim) (mins VS.! dim)
+    MVS.unsafeWrite nodeBounds (base + dimensions + dim) (maxs VS.! dim)
+
+selectByDim :: VS.Vector Int16 -> MVS.IOVector Int32 -> Int -> Int -> Int -> Int -> IO ()
+selectByDim refs indices left0 right0 kth dim =
+  go left0 right0
+  where
+    go !left !right
+      | right - left <= 1 = pure ()
+      | otherwise = do
+          pivotRow <- fromIntegral <$> MVS.unsafeRead indices (left + (right - left) `div` 2)
+          let pivot = refValue refs pivotRow dim
+          (lt, gt) <- partition3 left right pivot
+          if kth < lt
+            then go left lt
+            else
+              if kth <= gt
+                then pure ()
+                else go (gt + 1) right
+
+    partition3 !left !right !pivot =
+      loop left left (right - 1)
+      where
+        loop !lt !i !gt
+          | i > gt = pure (lt, gt)
+          | otherwise = do
+              row <- fromIntegral <$> MVS.unsafeRead indices i
+              let value = refValue refs row dim
+              if value < pivot
+                then do
+                  swap indices lt i
+                  loop (lt + 1) (i + 1) gt
+                else
+                  if value > pivot
+                    then do
+                      swap indices i gt
+                      loop lt i (gt - 1)
+                    else loop lt (i + 1) gt
+
+swap :: MVS.IOVector Int32 -> Int -> Int -> IO ()
+swap vec a b =
+  if a == b
+    then pure ()
+    else do
+      va <- MVS.unsafeRead vec a
+      vb <- MVS.unsafeRead vec b
+      MVS.unsafeWrite vec a vb
+      MVS.unsafeWrite vec b va
+
+refValue :: VS.Vector Int16 -> Int -> Int -> Int16
+refValue refs row dim =
+  refs VS.! (row * dimensions + dim)
 
 countReferenceVectors :: BS.ByteString -> Int
 countReferenceVectors = go 0 0
@@ -183,6 +351,26 @@ isNumberByte byte =
     || byte == charByte 'e'
     || byte == charByte 'E'
     || (byte >= charByte '0' && byte <= charByte '9')
+
+forInt :: Int -> Int -> (Int -> IO ()) -> IO ()
+forInt start end action = go start
+  where
+    go !i
+      | i >= end = pure ()
+      | otherwise = action i >> go (i + 1)
+
+leafSize :: Int
+leafSize = 64
+
+nodeMetaFields :: Int
+nodeMetaFields = 4
+
+nextPowerOfTwo :: Int -> Int
+nextPowerOfTwo n = go 1
+  where
+    go !x
+      | x >= n = x
+      | otherwise = go (x * 2)
 
 dimensions :: Int
 dimensions = 14

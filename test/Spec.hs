@@ -18,6 +18,7 @@ main = do
   testVectorizeKnownMerchant
   testMccDefault
   testIndexSearch
+  testKdIndexBuild
   testReferenceParser
   putStrLn "helheim-test passed"
 
@@ -62,11 +63,41 @@ testIndexSearch = do
         ReferenceIndex
           { referenceCount = 5,
             referenceVectors = VS.concat [legit, legit, legit, fraud, fraud],
-            referenceLabels = VS.fromList [0, 0, 0, 1, 1]
+            referenceLabels = VS.fromList [0, 0, 0, 1, 1],
+            referenceNodeCount = 0,
+            referenceNodeMeta = VS.empty,
+            referenceNodeBounds = VS.empty
           }
       response = searchIndex index query
   assertEqual "approved result" True (fraudResponseApproved response)
   assertEqual "fraud score" 0.4 (fraudResponseScore response)
+
+testKdIndexBuild :: IO ()
+testKdIndexBuild = do
+  bytes <- BL.readFile "rinha-de-backend-2026/resources/example-references.json"
+  _ <- buildIndexFromJsonBytes "/tmp/helheim-test-index.bin" (BL.toStrict bytes)
+  index <- loadIndex "/tmp/helheim-test-index.bin"
+  let query =
+        VS.fromList
+          [ 100,
+            833,
+            500,
+            8261,
+            1667,
+            -10000,
+            -10000,
+            432,
+            2500,
+            0,
+            10000,
+            0,
+            2000,
+            416
+          ]
+      response = searchIndex index query
+  assertEqual "kd reference count" 100 (referenceCount index)
+  assertEqual "kd nodes built" True (referenceNodeCount index > 0)
+  assertEqual "kd approved result" True (fraudResponseApproved response)
 
 testReferenceParser :: IO ()
 testReferenceParser = do
