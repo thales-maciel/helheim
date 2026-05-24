@@ -39,4 +39,4 @@ ENV HELHEIM_INDEX=/app/data/references.bin
 
 EXPOSE 8080
 
-CMD ["/app/helheim-api", "+RTS", "-N1", "-A2m", "-RTS", "--port", "8080", "--index", "/app/data/references.bin"]
+CMD ["/app/helheim-api", "+RTS", "-N1", "-A16m", "-I0", "-RTS", "--port", "8080", "--index", "/app/data/references.bin"]
