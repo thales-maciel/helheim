@@ -5,10 +5,11 @@ module Helheim.Api
   )
 where
 
-import Data.Aeson (eitherDecode, encode, object, (.=))
+import Data.Aeson (encode, object, (.=))
 import qualified Data.ByteString.Lazy as BL
 import Helheim.Engine
-import Helheim.Types
+import Helheim.RequestParser (parseFraudRequest)
+import Helheim.Types () -- ToJSON FraudResponse instance
 import Helheim.Vectorize
 import Network.HTTP.Types
 import Network.Wai
@@ -37,7 +38,7 @@ app engine request respond =
 
 fraudScoreResponse :: Engine -> BL.ByteString -> Response
 fraudScoreResponse engine body =
-  case eitherDecode body :: Either String FraudRequest of
+  case parseFraudRequest (BL.toStrict body) of
     Left err ->
       responseLBS status400 [jsonHeader] (encodeError err)
     Right fraudRequest ->

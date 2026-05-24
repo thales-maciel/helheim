@@ -10,15 +10,18 @@
 module Main (main) where
 
 import qualified Control.Exception as Exception
-import Data.Aeson (FromJSON (..), eitherDecode, withObject, (.:))
+import Data.Aeson (FromJSON (..), eitherDecode, eitherDecodeStrict', withObject, (.:))
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
 import Data.Int (Int64)
 import Data.List (foldl', sort)
-import Data.Word (Word64)
+import Data.Maybe (isJust)
+import Data.Word (Word64, Word8)
 import GHC.Clock (getMonotonicTimeNSec)
 import Helheim.Features (EncodedVector)
 import Helheim.Index
 import Helheim.PackedVector
+import Helheim.RequestParser (parseFraudRequest, runFast)
 import Helheim.Types (FraudRequest, FraudResponse (..))
 import Helheim.Vectorize (vectorize)
 import System.Environment (getArgs)
@@ -84,6 +87,93 @@ main = do
   printf "lower-bound calls: %d (%.2f/query)\n" (sLowerBound stats) (perQuery (sLowerBound stats) queryCount)
   printf "leaf rows scanned: %d (%.2f/query)\n" (sLeafRows stats) (perQuery (sLeafRows stats) queryCount)
   printf "distance calls:    %d (%.2f/query)\n" (sDistance stats) (perQuery (sDistance stats) queryCount)
+
+  -- JSON request parsing: full-dataset parity (byte parser vs Aeson) + timing.
+  let rawRequests = extractRequests (BL.toStrict testBytes)
+      rawCount = length rawRequests
+      mismatches = length [() | rb <- rawRequests, not (parityOk rb)]
+      fastPathCount = length (filter (isJust . runFast) rawRequests)
+  ta0 <- getMonotonicTimeNSec
+  aesonSum <- Exception.evaluate (parseChecksum aesonParse rawRequests)
+  ta1 <- getMonotonicTimeNSec
+  fastSum <- Exception.evaluate (parseChecksum parseFraudRequest rawRequests)
+  tf1 <- getMonotonicTimeNSec
+  let aesonNs = ta1 - ta0
+      fastNs = tf1 - ta1
+  printf "\n-- request parsing (decode + vectorize) --\n"
+  printf "raw requests:      %d\n" rawCount
+  printf "parity mismatches: %d\n" mismatches
+  printf "fast-path covered: %d (%.2f%%)\n" fastPathCount (100 * perQuery fastPathCount rawCount)
+  printf "checksum aeson/fast: %d / %d\n" aesonSum fastSum
+  printf "aeson parse:       %.3f us/req\n" (perReqUs aesonNs rawCount)
+  printf "fast parse:        %.3f us/req\n" (perReqUs fastNs rawCount)
+  printf "parse speedup:     %.2fx\n" (if fastNs == 0 then 0 else fromIntegral aesonNs / fromIntegral fastNs :: Double)
+
+aesonParse :: BS.ByteString -> Either String FraudRequest
+aesonParse = eitherDecodeStrict'
+
+-- | True when the byte parser and Aeson vectorize to the same result.
+parityOk :: BS.ByteString -> Bool
+parityOk rb = (vectorize <$> parseFraudRequest rb) == (vectorize <$> aesonParse rb)
+
+-- | Sum a checksum derived from decode+vectorize so the work isn't elided.
+parseChecksum :: (BS.ByteString -> Either String FraudRequest) -> [BS.ByteString] -> Int
+parseChecksum parser = foldl' (\ !acc rb -> acc + probe rb) 0
+  where
+    probe rb = case parser rb of
+      Right req -> case vectorize req of
+        Right v -> VS.foldl' (\ !a x -> a + fromIntegral x) 0 v
+        Left _ -> 0
+      Left _ -> 0
+
+perReqUs :: Word64 -> Int -> Double
+perReqUs _ 0 = 0
+perReqUs ns n = fromIntegral ns / 1000 / fromIntegral n
+
+-- | Extract each entry's raw "request" object bytes by scanning for the key
+-- and capturing balanced braces (skipping string contents).
+extractRequests :: BS.ByteString -> [BS.ByteString]
+extractRequests = go
+  where
+    needle = "\"request\":"
+    go bs =
+      let (_, rest) = BS.breakSubstring needle bs
+       in if BS.null rest
+            then []
+            else
+              let afterKey = BS.drop (BS.length needle) rest
+                  obj = takeObject afterKey
+               in if BS.null obj then go afterKey else obj : go afterKey
+
+takeObject :: BS.ByteString -> BS.ByteString
+takeObject bs =
+  case BS.findIndex (not . isWsW) bs of
+    Just s | BS.index bs s == 0x7B -> sliceObj s
+    _ -> BS.empty
+  where
+    len = BS.length bs
+    sliceObj s = scan (s + 1) (1 :: Int) False False
+      where
+        scan i depth inStr esc
+          | i >= len = BS.empty
+          | inStr =
+              if esc
+                then scan (i + 1) depth True False
+                else case BS.index bs i of
+                  0x5C -> scan (i + 1) depth True True
+                  0x22 -> scan (i + 1) depth False False
+                  _ -> scan (i + 1) depth True False
+          | otherwise = case BS.index bs i of
+              0x22 -> scan (i + 1) depth True False
+              0x7B -> scan (i + 1) (depth + 1) False False
+              0x7D ->
+                if depth == 1
+                  then BS.take (i + 1 - s) (BS.drop s bs)
+                  else scan (i + 1) (depth - 1) False False
+              _ -> scan (i + 1) depth False False
+
+isWsW :: Word8 -> Bool
+isWsW w = w == 0x20 || w == 0x09 || w == 0x0A || w == 0x0D
 
 perQuery :: Int -> Int -> Double
 perQuery _ 0 = 0

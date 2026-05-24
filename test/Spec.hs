@@ -5,9 +5,11 @@ module Main (main) where
 import Data.Aeson (eitherDecode)
 import qualified Data.ByteString.Lazy as BL
 import Data.Int (Int16, Int64)
+import Data.Maybe (isJust, isNothing)
 import Helheim.Index
 import Helheim.PackedVector
 import Helheim.ReferenceBuilder
+import Helheim.RequestParser (parseFraudRequest, runFast)
 import Helheim.Types
 import Helheim.Vectorize
 import qualified Data.Vector.Storable as VS
@@ -28,6 +30,8 @@ main = do
   testIndexSearch
   testKdIndexBuild
   testSearchResultParity
+  testRequestParserParity
+  testRequestParserFallback
   testReferenceParser
   putStrLn "helheim-test passed"
 
@@ -252,6 +256,52 @@ testSearchResultParity = do
         "kd vs flat score parity"
         (fraudResponseScore (searchIndex flat q))
         (fraudResponseScore (searchIndex kd q))
+
+-- | The fast byte-level request parser must produce results identical to the
+-- Aeson oracle on real wire payloads, and must actually take the fast path
+-- (not silently fall back).
+testRequestParserParity :: IO ()
+testRequestParserParity = mapM_ check requestParityPayloads
+  where
+    check payload = do
+      let strict = BL.toStrict payload
+          fast = parseFraudRequest strict
+          oracle = eitherDecode payload :: Either String FraudRequest
+      assertEqual "request parser fast path taken" True (isJust (runFast strict))
+      case (fast, oracle) of
+        (Right fr, Right orq) -> do
+          assertEqual "request parser FraudRequest parity" orq fr
+          assertEqual "request parser vectorize parity" (vectorize orq) (vectorize fr)
+        _ -> do
+          putStrLn "request parser parity: unexpected decode failure"
+          exitFailure
+
+-- | A string escape makes the fast path bail; the public parser must still
+-- match Aeson via the fallback.
+testRequestParserFallback :: IO ()
+testRequestParserFallback = do
+  let strict = BL.toStrict escapedIdPayload
+  assertEqual "escaped string bails fast path" True (isNothing (runFast strict))
+  assertEqual
+    "fallback vectorize parity"
+    (vectorize <$> (eitherDecode escapedIdPayload :: Either String FraudRequest))
+    (vectorize <$> parseFraudRequest strict)
+
+requestParityPayloads :: [BL.ByteString]
+requestParityPayloads =
+  [ firstExamplePayload,
+    secondExamplePayload,
+    -- present last_transaction, empty known_merchants, high-risk mcc, online terminal
+    "{\"id\":\"tx-99\",\"transaction\":{\"amount\":1234.5,\"installments\":6,\"requested_at\":\"2027-01-02T03:04:05Z\"},\"customer\":{\"avg_amount\":100.0,\"tx_count_24h\":15,\"known_merchants\":[]},\"merchant\":{\"id\":\"MERC-777\",\"mcc\":\"7995\",\"avg_amount\":4200.99},\"terminal\":{\"is_online\":true,\"card_present\":false,\"km_from_home\":812.5},\"last_transaction\":{\"timestamp\":\"2027-01-02T01:00:00Z\",\"km_from_current\":42.123456789}}",
+    -- unknown mcc (default risk), single known merchant equal to merchant id
+    "{\"id\":\"tx-100\",\"transaction\":{\"amount\":0.0,\"installments\":0,\"requested_at\":\"2026-12-31T23:59:59Z\"},\"customer\":{\"avg_amount\":50.0,\"tx_count_24h\":1,\"known_merchants\":[\"MERC-001\"]},\"merchant\":{\"id\":\"MERC-001\",\"mcc\":\"0000\",\"avg_amount\":10.0},\"terminal\":{\"is_online\":false,\"card_present\":true,\"km_from_home\":0.0},\"last_transaction\":null}"
+  ]
+
+-- firstExamplePayload with an escaped slash in the (unused) id field; valid
+-- JSON that the fast path declines, forcing the Aeson fallback.
+escapedIdPayload :: BL.ByteString
+escapedIdPayload =
+  "{\"id\":\"tx-\\/1329056812\",\"transaction\":{\"amount\":41.12,\"installments\":2,\"requested_at\":\"2026-03-11T18:45:53Z\"},\"customer\":{\"avg_amount\":82.24,\"tx_count_24h\":3,\"known_merchants\":[\"MERC-003\",\"MERC-016\"]},\"merchant\":{\"id\":\"MERC-016\",\"mcc\":\"5411\",\"avg_amount\":60.25},\"terminal\":{\"is_online\":false,\"card_present\":true,\"km_from_home\":29.2331036248},\"last_transaction\":null}"
 
 testReferenceParser :: IO ()
 testReferenceParser = do
