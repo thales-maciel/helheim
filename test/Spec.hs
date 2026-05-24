@@ -208,7 +208,7 @@ testIndexSearch = do
 testKdIndexBuild :: IO ()
 testKdIndexBuild = do
   bytes <- BL.readFile "rinha-de-backend-2026/resources/example-references.json"
-  _ <- buildIndexFromJsonBytes "/tmp/helheim-test-index.bin" (BL.toStrict bytes)
+  _ <- buildIndexFromJsonBytes "/tmp/helheim-test-index.bin" 64 (BL.toStrict bytes)
   index <- loadIndex "/tmp/helheim-test-index.bin"
   let query =
         VS.fromList
@@ -240,7 +240,7 @@ testKdIndexBuild = do
 testSearchResultParity :: IO ()
 testSearchResultParity = do
   bytes <- BL.readFile "rinha-de-backend-2026/resources/example-references.json"
-  _ <- buildIndexFromJsonBytes "/tmp/helheim-parity-index.bin" (BL.toStrict bytes)
+  _ <- buildIndexFromJsonBytes "/tmp/helheim-parity-index.bin" 64 (BL.toStrict bytes)
   index <- loadIndex "/tmp/helheim-parity-index.bin"
   let flat = index {referenceNodeCount = 0}
       queries =

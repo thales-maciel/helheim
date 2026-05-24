@@ -32,14 +32,14 @@ data BuildStats = BuildStats
   }
   deriving stock (Eq, Show)
 
-buildIndexFromGzip :: FilePath -> FilePath -> IO BuildStats
-buildIndexFromGzip input output = do
+buildIndexFromGzip :: FilePath -> FilePath -> Int -> IO BuildStats
+buildIndexFromGzip input output leafSize = do
   compressed <- BL.readFile input
   let jsonBytes = BL.toStrict (GZip.decompress compressed)
-  buildIndexFromJsonBytes output jsonBytes
+  buildIndexFromJsonBytes output leafSize jsonBytes
 
-buildIndexFromJsonBytes :: FilePath -> BS.ByteString -> IO BuildStats
-buildIndexFromJsonBytes output jsonBytes = do
+buildIndexFromJsonBytes :: FilePath -> Int -> BS.ByteString -> IO BuildStats
+buildIndexFromJsonBytes output leafSize jsonBytes = do
   let count = countReferenceVectors jsonBytes
   hPutStrLn stderr ("building reference index for " <> show count <> " vectors")
   vectors <- MVS.new (count * dimensionCount)
@@ -47,14 +47,14 @@ buildIndexFromJsonBytes output jsonBytes = do
   stats <- fillVectors jsonBytes count vectors labels
   frozenVectors <- VS.unsafeFreeze vectors
   frozenLabels <- VS.unsafeFreeze labels
-  index <- buildKdIndex count frozenVectors frozenLabels
+  index <- buildKdIndex leafSize count frozenVectors frozenLabels
   saveIndex
     output
     index
   pure stats
 
-buildKdIndex :: Int -> VS.Vector Int16 -> VS.Vector Word8 -> IO ReferenceIndex
-buildKdIndex count originalVectors originalLabels = do
+buildKdIndex :: Int -> Int -> VS.Vector Int16 -> VS.Vector Word8 -> IO ReferenceIndex
+buildKdIndex leafSize count originalVectors originalLabels = do
   hPutStrLn stderr ("building kd-tree index with leaf size " <> show leafSize)
   indices <- MVS.new count
   forInt 0 count $ \i ->
@@ -64,7 +64,7 @@ buildKdIndex count originalVectors originalLabels = do
   nodeMeta <- MVS.replicate (maxNodes * nodeMetaFields) 0
   nodeBounds <- MVS.new (maxNodes * dimensionCount * 2)
   nextNode <- newIORef 0
-  _ <- buildNode originalVectors indices nodeMeta nodeBounds nextNode 0 count
+  _ <- buildNode leafSize originalVectors indices nodeMeta nodeBounds nextNode 0 count
   nodeCount <- readIORef nextNode
   hPutStrLn stderr ("kd-tree nodes: " <> show nodeCount)
   reorderedVectors <- MVS.new (count * dimensionCount)
@@ -94,6 +94,7 @@ buildKdIndex count originalVectors originalLabels = do
       }
 
 buildNode ::
+  Int ->
   VS.Vector Int16 ->
   MVS.IOVector Int32 ->
   MVS.IOVector Int32 ->
@@ -102,7 +103,7 @@ buildNode ::
   Int ->
   Int ->
   IO Int
-buildNode refs indices nodeMeta nodeBounds nextNode start count = do
+buildNode leafSize refs indices nodeMeta nodeBounds nextNode start count = do
   node <- allocNode nextNode
   (mins, maxs, splitDim, splitWidth) <- computeBounds refs indices start count
   writeNodeBounds nodeBounds node mins maxs
@@ -113,8 +114,8 @@ buildNode refs indices nodeMeta nodeBounds nextNode start count = do
     else do
       let median = start + count `div` 2
       selectByDim refs indices start (start + count) median splitDim
-      left <- buildNode refs indices nodeMeta nodeBounds nextNode start (median - start)
-      right <- buildNode refs indices nodeMeta nodeBounds nextNode median (start + count - median)
+      left <- buildNode leafSize refs indices nodeMeta nodeBounds nextNode start (median - start)
+      right <- buildNode leafSize refs indices nodeMeta nodeBounds nextNode median (start + count - median)
       writeMeta nodeMeta node left right 0 0
       pure node
 
@@ -364,9 +365,6 @@ forInt start end action = go start
     go !i
       | i >= end = pure ()
       | otherwise = action i >> go (i + 1)
-
-leafSize :: Int
-leafSize = 64
 
 nodeMetaFields :: Int
 nodeMetaFields = 4

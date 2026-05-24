@@ -21,7 +21,8 @@ RUN mkdir -p /out/bin /out/data \
 
 RUN /out/bin/helheim-build-index \
   --input rinha-de-backend-2026/resources/references.json.gz \
-  --output /out/data/references.bin
+  --output /out/data/references.bin \
+  --leaf-size 32
 
 FROM debian:bookworm-slim AS runtime
 
