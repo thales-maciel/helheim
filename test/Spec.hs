@@ -6,6 +6,8 @@ import Data.Aeson (eitherDecode)
 import qualified Data.ByteString.Lazy as BL
 import Data.Int (Int16, Int64)
 import Data.Maybe (isJust, isNothing)
+import qualified Data.Text as T
+import Data.Time (UTCTime, defaultTimeLocale, parseTimeM)
 import Helheim.Index
 import Helheim.PackedVector
 import Helheim.ReferenceBuilder
@@ -32,6 +34,7 @@ main = do
   testSearchResultParity
   testRequestParserParity
   testRequestParserFallback
+  testTimestampParser
   testReferenceParser
   putStrLn "helheim-test passed"
 
@@ -302,6 +305,32 @@ requestParityPayloads =
 escapedIdPayload :: BL.ByteString
 escapedIdPayload =
   "{\"id\":\"tx-\\/1329056812\",\"transaction\":{\"amount\":41.12,\"installments\":2,\"requested_at\":\"2026-03-11T18:45:53Z\"},\"customer\":{\"avg_amount\":82.24,\"tx_count_24h\":3,\"known_merchants\":[\"MERC-003\",\"MERC-016\"]},\"merchant\":{\"id\":\"MERC-016\",\"mcc\":\"5411\",\"avg_amount\":60.25},\"terminal\":{\"is_online\":false,\"card_present\":true,\"km_from_home\":29.2331036248},\"last_transaction\":null}"
+
+-- | The fixed-format parseIsoUtc must produce exactly the same result as the
+-- parseTimeM oracle across valid timestamps (incl. leap day / boundaries) and
+-- malformed input (both must agree on the Left).
+testTimestampParser :: IO ()
+testTimestampParser = mapM_ check sampleTimestamps
+  where
+    check s =
+      let oracle = parseTimeM True defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" s :: Maybe UTCTime
+          expected = maybe (Left ("invalid UTC timestamp: " <> s)) Right oracle
+       in assertEqual ("iso timestamp parse " <> s) expected (parseIsoUtc (T.pack s))
+
+sampleTimestamps :: [String]
+sampleTimestamps =
+  [ "2026-03-11T18:45:53Z",
+    "2026-03-11T14:58:35Z",
+    "2027-07-09T16:31:06Z",
+    "2024-02-29T00:00:00Z",
+    "2026-12-31T23:59:59Z",
+    "2026-01-01T00:00:00Z",
+    "2026-02-28T12:00:00Z",
+    "2026-11-30T23:00:01Z",
+    "2026-13-01T00:00:00Z",
+    "2026-02-30T00:00:00Z",
+    "not-a-timestamp"
+  ]
 
 testReferenceParser :: IO ()
 testReferenceParser = do

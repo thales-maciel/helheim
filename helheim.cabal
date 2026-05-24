@@ -104,4 +104,5 @@ test-suite helheim-test
     bytestring,
     helheim,
     text,
+    time,
     vector
