@@ -1,11 +1,11 @@
 services:
-  nginx:
-    image: nginx:1.27-alpine
+  haproxy:
+    image: haproxy:3.0-alpine
     platform: linux/amd64
     ports:
       - "${HELHEIM_HOST_PORT:-9999}:9999"
     volumes:
-      - ./ops/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ops/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
     depends_on:
       - api1
       - api2
