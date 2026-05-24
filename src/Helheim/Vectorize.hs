@@ -1,7 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module Helheim.Vectorize
-  ( EncodedVector,
+  ( Dimension (..),
+    EncodedVector,
+    FraudFeatures (..),
+    dimensionCount,
     encodeDimension,
     mccRisk,
     queryScale,
@@ -10,54 +13,41 @@ module Helheim.Vectorize
   )
 where
 
-import Data.Int (Int16)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Time
 import Data.Time.Calendar.WeekDate (toWeekDate)
-import qualified Data.Vector.Storable as VS
+import Helheim.Features
 import Helheim.Types
 
-type EncodedVector = VS.Vector Int16
-
-queryScale :: Double
-queryScale = 10000
-
-encodeDimension :: Double -> Int16
-encodeDimension x
-  | x <= (-1) = -10000
-  | otherwise = round (clamp01 x * queryScale)
-
-toEncodedList :: EncodedVector -> [Int16]
-toEncodedList = VS.toList
+data LastTransactionFeatures = LastTransactionFeatures
+  { lastMinutesSinceRequest :: !Minutes,
+    lastKmFromRequest :: !Kilometers
+  }
 
 vectorize :: FraudRequest -> Either String EncodedVector
 vectorize request = do
   requestedAt <- parseIsoUtc (transactionRequestedAt tx)
-  lastPair <- traverse lastTransactionDimensions (fraudRequestLastTransaction request)
-  let minutesSinceLast = maybe (-1) fst lastPair
-      kmFromLast = maybe (-1) snd lastPair
-      unknownMerchant =
-        if merchantId merchant `elem` customerKnownMerchants customer
-          then 0
-          else 1
-      dims =
-        [ clamp01 (transactionAmount tx / maxAmount),
-          clamp01 (fromIntegral (transactionInstallments tx) / maxInstallments),
-          clamp01 ((safeDiv (transactionAmount tx) (customerAvgAmount customer)) / amountVsAvgRatio),
-          hourOfDay requestedAt / 23,
-          dayOfWeekMondayZero requestedAt / 6,
-          minutesSinceLast,
-          kmFromLast,
-          clamp01 (terminalKmFromHome terminal / maxKm),
-          clamp01 (fromIntegral (customerTxCount24h customer) / maxTxCount24h),
-          if terminalIsOnline terminal then 1 else 0,
-          if terminalCardPresent terminal then 1 else 0,
-          unknownMerchant,
-          mccRisk (merchantMcc merchant),
-          clamp01 (merchantAvgAmount merchant / maxMerchantAvgAmount)
-        ]
-  pure (VS.fromList (fmap encodeDimension dims))
+  lastFeatures <- traverse lastTransactionFeatures (fraudRequestLastTransaction request)
+  let merchantIsUnknown = merchantId merchant `notElem` customerKnownMerchants customer
+      features =
+        FraudFeatures
+          { fraudFeatureAmount = Amount (transactionAmount tx),
+            fraudFeatureInstallments = Installments (transactionInstallments tx),
+            fraudFeatureAmountVsAverage = AmountVsAverage (amountVsCustomerAverage tx customer),
+            fraudFeatureHour = hourOfDay requestedAt,
+            fraudFeatureWeekday = dayOfWeekMondayZero requestedAt,
+            fraudFeatureMinutesSinceLast = lastMinutesSinceRequest <$> lastFeatures,
+            fraudFeatureKmFromLast = lastKmFromRequest <$> lastFeatures,
+            fraudFeatureKmFromHome = Kilometers (terminalKmFromHome terminal),
+            fraudFeatureTxCount24h = TxCount24h (customerTxCount24h customer),
+            fraudFeatureOnlineTerminal = FeatureFlag (terminalIsOnline terminal),
+            fraudFeatureCardPresent = FeatureFlag (terminalCardPresent terminal),
+            fraudFeatureUnknownMerchant = FeatureFlag merchantIsUnknown,
+            fraudFeatureMccRisk = MccRiskScore (mccRisk (merchantMcc merchant)),
+            fraudFeatureMerchantAverageAmount = MerchantAverageAmount (merchantAvgAmount merchant)
+          }
+  pure (encodeFraudFeatures features)
   where
     tx = fraudRequestTransaction request
     customer = fraudRequestCustomer request
@@ -65,14 +55,19 @@ vectorize request = do
     terminal = fraudRequestTerminal request
     requestedAtText = transactionRequestedAt tx
 
-    lastTransactionDimensions lastTx = do
+    lastTransactionFeatures lastTx = do
       requestedAt <- parseIsoUtc requestedAtText
       previousAt <- parseIsoUtc (lastTransactionTimestamp lastTx)
       let minutes = realToFrac (diffUTCTime requestedAt previousAt) / (60 :: Double)
       pure
-        ( clamp01 (minutes / maxMinutes),
-          clamp01 (lastTransactionKmFromCurrent lastTx / maxKm)
-        )
+        LastTransactionFeatures
+          { lastMinutesSinceRequest = Minutes minutes,
+            lastKmFromRequest = Kilometers (lastTransactionKmFromCurrent lastTx)
+          }
+
+amountVsCustomerAverage :: Transaction -> Customer -> Double
+amountVsCustomerAverage tx customer =
+  safeDiv (transactionAmount tx) (customerAvgAmount customer)
 
 mccRisk :: Text -> Double
 mccRisk "5411" = 0.15
@@ -94,42 +89,15 @@ parseIsoUtc value =
     Right
     (parseTimeM True defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" (T.unpack value))
 
-hourOfDay :: UTCTime -> Double
+hourOfDay :: UTCTime -> HourOfDay
 hourOfDay =
-  fromIntegral . todHour . timeToTimeOfDay . utctDayTime
+  HourOfDay . todHour . timeToTimeOfDay . utctDayTime
 
-dayOfWeekMondayZero :: UTCTime -> Double
+dayOfWeekMondayZero :: UTCTime -> WeekdayMondayZero
 dayOfWeekMondayZero time =
   let (_, _, weekDay) = toWeekDate (utctDay time)
-   in fromIntegral (weekDay - 1)
+   in WeekdayMondayZero (weekDay - 1)
 
 safeDiv :: Double -> Double -> Double
 safeDiv _ 0 = 1 / 0
 safeDiv a b = a / b
-
-clamp01 :: Double -> Double
-clamp01 x
-  | x < 0 = 0
-  | x > 1 = 1
-  | otherwise = x
-
-maxAmount :: Double
-maxAmount = 10000
-
-maxInstallments :: Double
-maxInstallments = 12
-
-amountVsAvgRatio :: Double
-amountVsAvgRatio = 10
-
-maxMinutes :: Double
-maxMinutes = 1440
-
-maxKm :: Double
-maxKm = 1000
-
-maxTxCount24h :: Double
-maxTxCount24h = 20
-
-maxMerchantAvgAmount :: Double
-maxMerchantAvgAmount = 10000

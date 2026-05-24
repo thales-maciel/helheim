@@ -20,7 +20,9 @@ library
   exposed-modules:
     Helheim.Api
     Helheim.Engine
+    Helheim.Features
     Helheim.Index
+    Helheim.PackedVector
     Helheim.ReferenceBuilder
     Helheim.Types
     Helheim.Vectorize
@@ -71,6 +73,20 @@ executable helheim-eval
     aeson,
     bytestring,
     helheim
+
+executable helheim-bench-search
+  import: common-options
+  hs-source-dirs: app
+  main-is: BenchSearchMain.hs
+  ghc-options:
+    -threaded
+    -rtsopts
+  build-depends:
+    base,
+    aeson,
+    bytestring,
+    helheim,
+    vector
 
 test-suite helheim-test
   import: common-options

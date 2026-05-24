@@ -17,8 +17,9 @@ import qualified Data.ByteString.Lazy as BL
 import Data.IORef
 import Data.Int (Int16, Int32)
 import Data.Word (Word8)
+import Helheim.Features (dimensionCount, encodeDimension)
 import Helheim.Index
-import Helheim.Vectorize (encodeDimension)
+import Helheim.PackedVector
 import qualified Data.Vector.Storable as VS
 import qualified Data.Vector.Storable.Mutable as MVS
 import System.IO (hPutStrLn, stderr)
@@ -41,7 +42,7 @@ buildIndexFromJsonBytes :: FilePath -> BS.ByteString -> IO BuildStats
 buildIndexFromJsonBytes output jsonBytes = do
   let count = countReferenceVectors jsonBytes
   hPutStrLn stderr ("building reference index for " <> show count <> " vectors")
-  vectors <- MVS.new (count * dimensions)
+  vectors <- MVS.new (count * dimensionCount)
   labels <- MVS.new count
   stats <- fillVectors jsonBytes count vectors labels
   frozenVectors <- VS.unsafeFreeze vectors
@@ -61,30 +62,35 @@ buildKdIndex count originalVectors originalLabels = do
   let maxLeaves = nextPowerOfTwo ((count + leafSize - 1) `div` leafSize)
       maxNodes = 2 * maxLeaves + 1
   nodeMeta <- MVS.replicate (maxNodes * nodeMetaFields) 0
-  nodeBounds <- MVS.new (maxNodes * dimensions * 2)
+  nodeBounds <- MVS.new (maxNodes * dimensionCount * 2)
   nextNode <- newIORef 0
   _ <- buildNode originalVectors indices nodeMeta nodeBounds nextNode 0 count
   nodeCount <- readIORef nextNode
   hPutStrLn stderr ("kd-tree nodes: " <> show nodeCount)
-  reorderedVectors <- MVS.new (count * dimensions)
+  reorderedVectors <- MVS.new (count * dimensionCount)
   reorderedLabels <- MVS.new count
   forInt 0 count $ \newRow -> do
     oldRow <- fromIntegral <$> MVS.unsafeRead indices newRow
-    forInt 0 dimensions $ \dim ->
-      MVS.unsafeWrite reorderedVectors (newRow * dimensions + dim) (refValue originalVectors oldRow dim)
+    forInt 0 dimensionCount $ \dim ->
+      MVS.unsafeWrite reorderedVectors (newRow * dimensionCount + dim) (refValue originalVectors oldRow dim)
     MVS.unsafeWrite reorderedLabels newRow (originalLabels VS.! oldRow)
   finalVectors <- VS.unsafeFreeze reorderedVectors
   finalLabels <- VS.unsafeFreeze reorderedLabels
   finalMetaFull <- VS.unsafeFreeze nodeMeta
   finalBoundsFull <- VS.unsafeFreeze nodeBounds
+  let finalMeta = VS.take (nodeCount * nodeMetaFields) finalMetaFull
+      finalBounds = VS.take (nodeCount * dimensionCount * 2) finalBoundsFull
+  packedVectors <- either fail pure (packReferenceVectors count finalVectors)
+  packedLabels <- either fail pure (packLabels count finalLabels)
+  packedBounds <- either fail pure (packNodeBounds nodeCount finalBounds)
   pure
     ReferenceIndex
       { referenceCount = count,
-        referenceVectors = finalVectors,
-        referenceLabels = finalLabels,
+        referenceVectorWords = packedVectors,
+        referenceLabelWords = packedLabels,
         referenceNodeCount = nodeCount,
-        referenceNodeMeta = VS.take (nodeCount * nodeMetaFields) finalMetaFull,
-        referenceNodeBounds = VS.take (nodeCount * dimensions * 2) finalBoundsFull
+        referenceNodeMeta = finalMeta,
+        referenceNodeBoundWords = packedBounds
       }
 
 buildNode ::
@@ -126,15 +132,15 @@ computeBounds ::
   IO (VS.Vector Int16, VS.Vector Int16, Int, Int)
 computeBounds refs indices start count = do
   firstRow <- fromIntegral <$> MVS.unsafeRead indices start
-  mins <- MVS.new dimensions
-  maxs <- MVS.new dimensions
-  forInt 0 dimensions $ \dim -> do
+  mins <- MVS.new dimensionCount
+  maxs <- MVS.new dimensionCount
+  forInt 0 dimensionCount $ \dim -> do
     let value = refValue refs firstRow dim
     MVS.unsafeWrite mins dim value
     MVS.unsafeWrite maxs dim value
   forInt (start + 1) (start + count) $ \pos -> do
     row <- fromIntegral <$> MVS.unsafeRead indices pos
-    forInt 0 dimensions $ \dim -> do
+    forInt 0 dimensionCount $ \dim -> do
       let value = refValue refs row dim
       oldMin <- MVS.unsafeRead mins dim
       oldMax <- MVS.unsafeRead maxs dim
@@ -150,7 +156,7 @@ widestDimension mins maxs =
   go 0 0 0
   where
     go !dim !bestDim !bestWidth
-      | dim >= dimensions = (bestDim, bestWidth)
+      | dim >= dimensionCount = (bestDim, bestWidth)
       | otherwise =
           let width = fromIntegral (maxs VS.! dim) - fromIntegral (mins VS.! dim)
            in if width > bestWidth
@@ -167,10 +173,10 @@ writeMeta nodeMeta node left right start count = do
 
 writeNodeBounds :: MVS.IOVector Int16 -> Int -> VS.Vector Int16 -> VS.Vector Int16 -> IO ()
 writeNodeBounds nodeBounds node mins maxs = do
-  let base = node * dimensions * 2
-  forInt 0 dimensions $ \dim -> do
+  let base = node * dimensionCount * 2
+  forInt 0 dimensionCount $ \dim -> do
     MVS.unsafeWrite nodeBounds (base + dim) (mins VS.! dim)
-    MVS.unsafeWrite nodeBounds (base + dimensions + dim) (maxs VS.! dim)
+    MVS.unsafeWrite nodeBounds (base + dimensionCount + dim) (maxs VS.! dim)
 
 selectByDim :: VS.Vector Int16 -> MVS.IOVector Int32 -> Int -> Int -> Int -> Int -> IO ()
 selectByDim refs indices left0 right0 kth dim =
@@ -220,7 +226,7 @@ swap vec a b =
 
 refValue :: VS.Vector Int16 -> Int -> Int -> Int16
 refValue refs row dim =
-  refs VS.! (row * dimensions + dim)
+  refs VS.! (row * dimensionCount + dim)
 
 countReferenceVectors :: BS.ByteString -> Int
 countReferenceVectors = go 0 0
@@ -253,7 +259,7 @@ fillVectors jsonBytes expectedCount vectors labels =
             Left err -> fail err
             Right (parsed, nextPos) -> do
               forM_ (zip [0 ..] (parsedVector parsed)) $ \(dim, value) ->
-                MVS.unsafeWrite vectors (row * dimensions + dim) value
+                MVS.unsafeWrite vectors (row * dimensionCount + dim) value
               MVS.unsafeWrite labels row (parsedLabel parsed)
               let frauds' = frauds + if parsedLabel parsed == 1 then 1 else 0
                   legits' = legits + if parsedLabel parsed == 0 then 1 else 0
@@ -284,7 +290,7 @@ parseVector bytes pos0 = do
   pure (reverse values, posClose + 1)
   where
     parseDims !dim !pos !acc
-      | dim >= dimensions = pure (acc, pos)
+      | dim >= dimensionCount = pure (acc, pos)
       | otherwise = do
           posValue <- if dim == 0 then pure pos else expectByte ',' bytes pos >>= pure . (+ 1)
           (value, posAfterValue) <- parseNumber bytes posValue
@@ -371,6 +377,3 @@ nextPowerOfTwo n = go 1
     go !x
       | x >= n = x
       | otherwise = go (x * 2)
-
-dimensions :: Int
-dimensions = 14

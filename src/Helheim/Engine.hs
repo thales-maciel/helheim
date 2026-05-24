@@ -8,11 +8,9 @@ module Helheim.Engine
   )
 where
 
-import Data.Int (Int16)
+import Helheim.Features
 import Helheim.Index
 import Helheim.Types
-import Helheim.Vectorize
-import qualified Data.Vector.Storable as VS
 
 data EngineMode = ExactMode | HybridMode
   deriving stock (Eq, Show)
@@ -36,49 +34,106 @@ classify engine request query =
   case engineMode engine of
     ExactMode -> searchIndex (engineIndex engine) query
     HybridMode ->
-      case shortcut request query of
+      case shortcut request (encodedFeatures query) of
         Just response -> response
         Nothing -> searchIndex (engineIndex engine) query
 
-shortcut :: FraudRequest -> EncodedVector -> Maybe FraudResponse
-shortcut request query
-  | clearLegit request query = Just (FraudResponse True 0.0)
-  | clearFraud request query = Just (FraudResponse False 1.0)
+shortcut :: FraudRequest -> EncodedFeatures -> Maybe FraudResponse
+shortcut request features
+  | clearLegit request features = Just (FraudResponse True 0.0)
+  | clearFraud features = Just (FraudResponse False 1.0)
   | otherwise = Nothing
 
-clearLegit :: FraudRequest -> EncodedVector -> Bool
-clearLegit request query =
-  dim 0 <= 600
-    && dim 1 <= 3334
-    && dim 2 <= 600
-    && dim 7 <= 600
-    && dim 8 <= 2500
-    && dim 11 == 0
-    && dim 12 <= 3000
-    && businessHour
+clearLegit :: FraudRequest -> EncodedFeatures -> Bool
+clearLegit request features =
+  encodedAmount features <= clearLegitMaxAmount
+    && encodedInstallments features <= clearLegitMaxInstallments
+    && encodedAmountVsAverage features <= clearLegitMaxAmountVsAverage
+    && encodedKmFromHome features <= clearLegitMaxKmFromHome
+    && encodedTxCount24h features <= clearLegitMaxTxCount24h
+    && encodedUnknownMerchant features == knownMerchant
+    && encodedMccRisk features <= clearLegitMaxMccRisk
+    && isBusinessHour (encodedHour features)
     && lastLooksLegit
   where
-    dim = vectorDim query
-    businessHour = dim 3 >= 3000 && dim 3 <= 8700
     lastLooksLegit =
       case fraudRequestLastTransaction request of
         Nothing -> True
-        Just _ -> dim 6 <= 400
+        Just _ -> encodedKmFromLast features <= clearLegitMaxKmFromLast
 
-clearFraud :: FraudRequest -> EncodedVector -> Bool
-clearFraud _ query =
-  dim 0 >= 3000
-    && dim 1 >= 5000
-    && dim 2 >= 8000
-    && dim 3 <= 2609
-    && dim 7 >= 3000
-    && dim 8 >= 4000
-    && dim 11 == 10000
-    && dim 12 >= 7500
-    && (dim 5 == -10000 || dim 6 >= 2000)
-  where
-    dim = vectorDim query
+clearFraud :: EncodedFeatures -> Bool
+clearFraud features =
+  encodedAmount features >= clearFraudMinAmount
+    && encodedInstallments features >= clearFraudMinInstallments
+    && encodedAmountVsAverage features >= clearFraudMinAmountVsAverage
+    && encodedHour features <= clearFraudLatestHour
+    && encodedKmFromHome features >= clearFraudMinKmFromHome
+    && encodedTxCount24h features >= clearFraudMinTxCount24h
+    && encodedUnknownMerchant features == unknownMerchant
+    && encodedMccRisk features >= clearFraudMinMccRisk
+    && (encodedMinutesSinceLast features == missingFeature || encodedKmFromLast features >= clearFraudMinKmFromLast)
 
-vectorDim :: EncodedVector -> Int -> Int16
-vectorDim query dim =
-  query VS.! dim
+isBusinessHour :: EncodedFeature -> Bool
+isBusinessHour hour =
+  between hour businessHourStart businessHourEnd
+
+between :: Ord a => a -> a -> a -> Bool
+between value low high =
+  value >= low && value <= high
+
+knownMerchant :: EncodedFeature
+knownMerchant = flagAt (FeatureFlag False)
+
+unknownMerchant :: EncodedFeature
+unknownMerchant = flagAt (FeatureFlag True)
+
+clearLegitMaxAmount :: EncodedFeature
+clearLegitMaxAmount = amountAt (Amount 600)
+
+clearLegitMaxInstallments :: EncodedFeature
+clearLegitMaxInstallments = installmentsAt (Installments 4)
+
+clearLegitMaxAmountVsAverage :: EncodedFeature
+clearLegitMaxAmountVsAverage = amountVsAverageAt (AmountVsAverage 0.6)
+
+clearLegitMaxKmFromHome :: EncodedFeature
+clearLegitMaxKmFromHome = kilometersAt (Kilometers 60)
+
+clearLegitMaxTxCount24h :: EncodedFeature
+clearLegitMaxTxCount24h = txCount24hAt (TxCount24h 5)
+
+clearLegitMaxMccRisk :: EncodedFeature
+clearLegitMaxMccRisk = mccRiskAt (MccRiskScore 0.30)
+
+businessHourStart :: EncodedFeature
+businessHourStart = hourAt (HourOfDay 7)
+
+businessHourEnd :: EncodedFeature
+businessHourEnd = hourAt (HourOfDay 20)
+
+clearLegitMaxKmFromLast :: EncodedFeature
+clearLegitMaxKmFromLast = kilometersAt (Kilometers 40)
+
+clearFraudMinAmount :: EncodedFeature
+clearFraudMinAmount = amountAt (Amount 3000)
+
+clearFraudMinInstallments :: EncodedFeature
+clearFraudMinInstallments = installmentsAt (Installments 6)
+
+clearFraudMinAmountVsAverage :: EncodedFeature
+clearFraudMinAmountVsAverage = amountVsAverageAt (AmountVsAverage 8)
+
+clearFraudLatestHour :: EncodedFeature
+clearFraudLatestHour = hourAt (HourOfDay 6)
+
+clearFraudMinKmFromHome :: EncodedFeature
+clearFraudMinKmFromHome = kilometersAt (Kilometers 300)
+
+clearFraudMinTxCount24h :: EncodedFeature
+clearFraudMinTxCount24h = txCount24hAt (TxCount24h 8)
+
+clearFraudMinMccRisk :: EncodedFeature
+clearFraudMinMccRisk = mccRiskAt (MccRiskScore 0.75)
+
+clearFraudMinKmFromLast :: EncodedFeature
+clearFraudMinKmFromLast = kilometersAt (Kilometers 200)
