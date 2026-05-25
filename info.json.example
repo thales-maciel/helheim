@@ -2,6 +2,6 @@
   "participants": ["Your Name"],
   "social": ["https://github.com/your-user"],
   "source-code-repo": "https://github.com/your-user/helheim",
-  "stack": ["haskell", "warp", "nginx"],
+  "stack": ["haskell", "warp", "haproxy"],
   "open_to_work": false
 }

@@ -70,9 +70,20 @@ Run the local contest topology:
 docker compose up --build
 ```
 
-The compose file starts nginx on port `9999` and two API instances on the
+The compose file starts HAProxy on port `9999` and two API instances on the
 bridge network. For the final `submission` branch, replace the local build with
 a public `linux-amd64` image reference as required by the contest rules.
+
+Build a release image with an immutable commit tag:
+
+```sh
+./scripts/build-image.sh --push
+```
+
+The script publishes `ghcr.io/thales-maciel/helheim:<commit>` by default and
+adds OCI labels for the source commit, version, creation time, and license. It
+refuses to tag dirty tracked files as a clean commit unless
+`HELHEIM_ALLOW_DIRTY=1` is set for local experiments.
 
 ## Contest Notes
 

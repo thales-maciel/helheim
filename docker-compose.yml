@@ -18,7 +18,7 @@ services:
           memory: "20MB"
 
   api1:
-    image: helheim:local
+    image: ${HELHEIM_IMAGE:-helheim:local}
     platform: linux/amd64
     build:
       context: .
@@ -35,7 +35,7 @@ services:
           memory: "165MB"
 
   api2:
-    image: helheim:local
+    image: ${HELHEIM_IMAGE:-helheim:local}
     platform: linux/amd64
     build:
       context: .

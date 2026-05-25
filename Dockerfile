@@ -26,6 +26,18 @@ RUN /out/bin/helheim-build-index \
 
 FROM debian:bookworm-slim AS runtime
 
+ARG VCS_REF=unknown
+ARG VERSION=dev
+ARG CREATED=unknown
+
+LABEL org.opencontainers.image.title="helheim" \
+      org.opencontainers.image.description="Rinha de Backend 2026 fraud detector" \
+      org.opencontainers.image.source="https://github.com/thales-maciel/helheim" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.created="${CREATED}" \
+      org.opencontainers.image.licenses="MIT"
+
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates libffi8 libgmp10 zlib1g \
   && rm -rf /var/lib/apt/lists/*

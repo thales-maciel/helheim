@@ -9,7 +9,7 @@ import Data.Aeson (encode, object, (.=))
 import qualified Data.ByteString.Lazy as BL
 import Helheim.Engine
 import Helheim.RequestParser (parseFraudRequest)
-import Helheim.Types () -- ToJSON FraudResponse instance
+import Helheim.Types (FraudResponse (..))
 import Helheim.Vectorize
 import Network.HTTP.Types
 import Network.Wai
@@ -23,7 +23,8 @@ runApi port engine =
       setPort port $
         setHost "*" $
           setServerName "helheim" $
-            defaultSettings
+            setTimeout 5 $
+              defaultSettings
 
 app :: Engine -> Application
 app engine request respond =
@@ -46,7 +47,16 @@ fraudScoreResponse engine body =
         Left err ->
           responseLBS status400 [jsonHeader] (encodeError err)
         Right query ->
-          responseLBS status200 [jsonHeader] (encode (classify engine fraudRequest query))
+          responseLBS status200 [jsonHeader] (encodeFraudResponse (classify engine fraudRequest query))
+
+encodeFraudResponse :: FraudResponse -> BL.ByteString
+encodeFraudResponse FraudResponse {fraudResponseScore = score}
+  | score < 0.1 = "{\"approved\":true,\"fraud_score\":0.0}"
+  | score < 0.3 = "{\"approved\":true,\"fraud_score\":0.2}"
+  | score < 0.5 = "{\"approved\":true,\"fraud_score\":0.4}"
+  | score < 0.7 = "{\"approved\":false,\"fraud_score\":0.6}"
+  | score < 0.9 = "{\"approved\":false,\"fraud_score\":0.8}"
+  | otherwise = "{\"approved\":false,\"fraud_score\":1.0}"
 
 jsonHeader :: Header
 jsonHeader = ("Content-Type", "application/json")
