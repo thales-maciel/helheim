@@ -18,7 +18,7 @@ services:
           memory: "20MB"
 
   api1:
-    image: ghcr.io/thales-maciel/helheim:latest
+    image: ghcr.io/thales-maciel/helheim:3467bdafacda@sha256:aaecccf44ad4c734ce4da72f9a786518143914bc964710faa54aac45dd37f9cd
     platform: linux/amd64
     environment:
       HELHEIM_INDEX: /app/data/references.bin
@@ -32,7 +32,7 @@ services:
           memory: "165MB"
 
   api2:
-    image: ghcr.io/thales-maciel/helheim:latest
+    image: ghcr.io/thales-maciel/helheim:3467bdafacda@sha256:aaecccf44ad4c734ce4da72f9a786518143914bc964710faa54aac45dd37f9cd
     platform: linux/amd64
     environment:
       HELHEIM_INDEX: /app/data/references.bin
