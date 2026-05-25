@@ -14,11 +14,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.10"
+          cpus: "0.08"
           memory: "20MB"
 
   api1:
-    image: ghcr.io/thales-maciel/helheim:3467bdafacda@sha256:aaecccf44ad4c734ce4da72f9a786518143914bc964710faa54aac45dd37f9cd
+    image: ghcr.io/thales-maciel/helheim:240ae7e@sha256:f6b9994e224b05ad90efe550265bb1802774a30f9ce6c8a30fb1180b1236409c
     platform: linux/amd64
     environment:
       HELHEIM_INDEX: /app/data/references.bin
@@ -28,11 +28,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.45"
+          cpus: "0.46"
           memory: "165MB"
 
   api2:
-    image: ghcr.io/thales-maciel/helheim:3467bdafacda@sha256:aaecccf44ad4c734ce4da72f9a786518143914bc964710faa54aac45dd37f9cd
+    image: ghcr.io/thales-maciel/helheim:240ae7e@sha256:f6b9994e224b05ad90efe550265bb1802774a30f9ce6c8a30fb1180b1236409c
     platform: linux/amd64
     environment:
       HELHEIM_INDEX: /app/data/references.bin
@@ -42,7 +42,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.45"
+          cpus: "0.46"
           memory: "165MB"
 
 networks:
