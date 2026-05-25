@@ -3,6 +3,7 @@
 
 module Helheim.Index
   ( ReferenceIndex (..),
+    fraudCount,
     fraudScore,
     loadIndex,
     saveIndex,
@@ -64,13 +65,20 @@ searchIndex index query =
 fraudScore :: ReferenceIndex -> EncodedVector -> Double
 fraudScore index query =
   let neighborCount = min 5 (referenceCount index)
-      frauds =
-        if referenceNodeCount index > 0
-          then kdFrauds index query
-          else flatFrauds index query
    in if neighborCount == 0
         then 0
-        else fromIntegral frauds / fromIntegral neighborCount
+        else fromIntegral (fraudCount index query) / fromIntegral neighborCount
+
+-- | The number of frauds among the (up to 5) nearest neighbours, in [0,5].
+-- The API hot path uses this to index directly into the 6 pre-baked responses,
+-- skipping the Double score round-trip. For the contest's 3M-row dataset there
+-- are always 5 neighbours, so the count maps 1:1 onto fraud_score 0.0..1.0;
+-- 'fraudScore' stays the general path for eval/tests and degenerate small indices.
+fraudCount :: ReferenceIndex -> EncodedVector -> Int
+fraudCount index query
+  | referenceNodeCount index > 0 = kdFrauds index query
+  | otherwise = flatFrauds index query
+{-# INLINE fraudCount #-}
 
 flatFrauds :: ReferenceIndex -> EncodedVector -> Int
 flatFrauds index query =

@@ -4,6 +4,7 @@ module Helheim.Engine
   ( Engine (..),
     EngineMode (..),
     classify,
+    classifyCount,
     engineModeFromString,
   )
 where
@@ -37,6 +38,23 @@ classify engine request query =
       case shortcut request (encodedFeatures query) of
         Just response -> response
         Nothing -> searchIndex (engineIndex engine) query
+
+-- | Like 'classify', but returns just the fraud count in [0,5] so the API can
+-- index directly into pre-baked responses without building a 'FraudResponse'
+-- or round-tripping through the Double score.
+classifyCount :: Engine -> FraudRequest -> EncodedVector -> Int
+classifyCount engine request query =
+  case engineMode engine of
+    ExactMode -> fraudCount (engineIndex engine) query
+    HybridMode ->
+      case shortcut request (encodedFeatures query) of
+        Just response -> scoreToCount (fraudResponseScore response)
+        Nothing -> fraudCount (engineIndex engine) query
+
+-- A shortcut response carries a 0.0 (clear legit) or 1.0 (clear fraud) score;
+-- map it back to the equivalent neighbour count for the pre-baked response table.
+scoreToCount :: Double -> Int
+scoreToCount s = max 0 (min 5 (round (s * 5)))
 
 shortcut :: FraudRequest -> EncodedFeatures -> Maybe FraudResponse
 shortcut request features

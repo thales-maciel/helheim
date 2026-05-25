@@ -9,7 +9,6 @@ import Data.Aeson (encode, object, (.=))
 import qualified Data.ByteString.Lazy as BL
 import Helheim.Engine
 import Helheim.RequestParser (parseFraudRequest)
-import Helheim.Types (FraudResponse (..))
 import Helheim.Vectorize
 import Network.HTTP.Types
 import Network.Wai
@@ -47,16 +46,29 @@ fraudScoreResponse engine body =
         Left err ->
           responseLBS status400 [jsonHeader] (encodeError err)
         Right query ->
-          responseLBS status200 [jsonHeader] (encodeFraudResponse (classify engine fraudRequest query))
+          fraudResponseFor (classifyCount engine fraudRequest query)
 
-encodeFraudResponse :: FraudResponse -> BL.ByteString
-encodeFraudResponse FraudResponse {fraudResponseScore = score}
-  | score < 0.1 = "{\"approved\":true,\"fraud_score\":0.0}"
-  | score < 0.3 = "{\"approved\":true,\"fraud_score\":0.2}"
-  | score < 0.5 = "{\"approved\":true,\"fraud_score\":0.4}"
-  | score < 0.7 = "{\"approved\":false,\"fraud_score\":0.6}"
-  | score < 0.9 = "{\"approved\":false,\"fraud_score\":0.8}"
-  | otherwise = "{\"approved\":false,\"fraud_score\":1.0}"
+-- Pre-baked responses, one per possible fraud count (0..5 neighbours). Built
+-- once as CAFs; the hot path just selects one, avoiding per-request Response
+-- construction, the Double score, and JSON encoding.
+fraudResponseFor :: Int -> Response
+fraudResponseFor 0 = response00
+fraudResponseFor 1 = response02
+fraudResponseFor 2 = response04
+fraudResponseFor 3 = response06
+fraudResponseFor 4 = response08
+fraudResponseFor _ = response10
+
+response00, response02, response04, response06, response08, response10 :: Response
+response00 = bakedResponse "{\"approved\":true,\"fraud_score\":0.0}"
+response02 = bakedResponse "{\"approved\":true,\"fraud_score\":0.2}"
+response04 = bakedResponse "{\"approved\":true,\"fraud_score\":0.4}"
+response06 = bakedResponse "{\"approved\":false,\"fraud_score\":0.6}"
+response08 = bakedResponse "{\"approved\":false,\"fraud_score\":0.8}"
+response10 = bakedResponse "{\"approved\":false,\"fraud_score\":1.0}"
+
+bakedResponse :: BL.ByteString -> Response
+bakedResponse = responseLBS status200 [jsonHeader]
 
 jsonHeader :: Header
 jsonHeader = ("Content-Type", "application/json")
