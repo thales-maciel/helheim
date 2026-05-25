@@ -1,0 +1,7 @@
+{
+  "participants": ["Thales Maciel"],
+  "social": ["https://github.com/thales-maciel"],
+  "source-code-repo": "https://github.com/thales-maciel/helheim",
+  "stack": ["haskell", "warp", "haproxy"],
+  "open_to_work": false
+}

@@ -3,7 +3,7 @@ services:
     image: haproxy:3.0-alpine
     platform: linux/amd64
     ports:
-      - "${HELHEIM_HOST_PORT:-9999}:9999"
+      - "9999:9999"
     volumes:
       - ./ops/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
     depends_on:
@@ -18,12 +18,9 @@ services:
           memory: "20MB"
 
   api1:
-    image: helheim:local
+    image: ghcr.io/thales-maciel/helheim:latest
     platform: linux/amd64
-    build:
-      context: .
     environment:
-      PORT: "8080"
       HELHEIM_INDEX: /app/data/references.bin
       HELHEIM_ENGINE: exact
     networks:
@@ -35,12 +32,9 @@ services:
           memory: "165MB"
 
   api2:
-    image: helheim:local
+    image: ghcr.io/thales-maciel/helheim:latest
     platform: linux/amd64
-    build:
-      context: .
     environment:
-      PORT: "8080"
       HELHEIM_INDEX: /app/data/references.bin
       HELHEIM_ENGINE: exact
     networks:
